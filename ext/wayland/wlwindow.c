@@ -27,6 +27,8 @@
 #include "wlwindow.h"
 #include "wlshmallocator.h"
 #include "wlbuffer.h"
+#include "wldrm.h"
+#include <gst/drm/gstdrmallocator.h>
 
 GST_DEBUG_CATEGORY_EXTERN (gstwayland_debug);
 #define GST_CAT_DEFAULT gstwayland_debug
@@ -331,11 +333,22 @@ gst_wl_window_update_borders (GstWlWindow * window)
   /* draw the area_subsurface */
   gst_video_info_set_format (&info, format, width, height);
 
-  buf = gst_buffer_new_allocate (gst_wl_shm_allocator_get (), info.size, NULL);
+  if (window->display->use_drm) {
+    buf = gst_buffer_new_allocate (gst_drm_allocator_get (), info.size, NULL);
+  } else {
+    buf = gst_buffer_new_allocate (gst_wl_shm_allocator_get (), info.size, NULL);
+  }
   gst_buffer_memset (buf, 0, 0, info.size);
-  wlbuf =
-      gst_wl_shm_memory_construct_wl_buffer (gst_buffer_peek_memory (buf, 0),
-      window->display, &info);
+  if (window->display->use_drm) {
+     wlbuf =
+       gst_wl_drm_memory_construct_wl_buffer (gst_buffer_peek_memory (buf, 0),
+       window->display, &info);
+   } else {
+    wlbuf =
+       gst_wl_shm_memory_construct_wl_buffer (gst_buffer_peek_memory (buf, 0),
+       window->display, &info);
+  }
+
   gwlbuf = gst_buffer_add_wl_buffer (buf, wlbuf, window->display);
   gst_wl_buffer_attach (gwlbuf, window->area_surface);
 

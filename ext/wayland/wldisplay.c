@@ -25,6 +25,13 @@
 #include "wldisplay.h"
 #include "wlbuffer.h"
 
+#include <wayland-client-protocol.h>
+#include "wayland-drm-client-protocol.h"
+#include <linux/input.h>
+#include <tcc_drm.h>
+#include <tcc_drmif.h>
+#include <fcntl.h>
+#include <unistd.h>
 #include <errno.h>
 
 GST_DEBUG_CATEGORY_EXTERN (gstwayland_debug);
@@ -45,6 +52,8 @@ static void
 gst_wl_display_init (GstWlDisplay * self)
 {
   self->shm_formats = g_array_new (FALSE, FALSE, sizeof (uint32_t));
+  self->fd = -1;
+  self->use_drm = FALSE;
   self->wl_fd_poll = gst_poll_new (TRUE);
   self->buffers = g_hash_table_new (g_direct_hash, g_direct_equal);
   g_mutex_init (&self->buffers_mutex);
@@ -71,6 +80,14 @@ gst_wl_display_finalize (GObject * gobject)
   g_hash_table_remove_all (self->buffers);
 
   g_array_unref (self->shm_formats);
+
+  if (self->dev) {
+    tcc_device_destroy (self->dev);
+    self->dev = NULL;
+  }
+  if (self->fd !=-1)
+    close (self->fd);
+
   gst_poll_free (self->wl_fd_poll);
   g_hash_table_unref (self->buffers);
   g_mutex_clear (&self->buffers_mutex);
@@ -80,6 +97,9 @@ gst_wl_display_finalize (GObject * gobject)
 
   if (self->shm)
     wl_shm_destroy (self->shm);
+
+  if (self->drm)
+    wl_drm_destroy (self->drm);
 
   if (self->shell)
     wl_shell_destroy (self->shell);
@@ -147,6 +167,46 @@ static const struct wl_shm_listener shm_listener = {
   shm_format
 };
 
+/* For wl_drm_listener */
+
+static void
+drm_handle_device (void *data, struct wl_drm *drm, const char *device)
+{
+  GstWlDisplay *d = data;
+  drm_magic_t magic;
+  d->fd = open (device, O_RDWR | O_CLOEXEC);
+  if (d->fd == -1) {
+    GST_ERROR ("could not open %s: %m", device);
+    return;
+  }
+  drmGetMagic (d->fd, &magic);
+  wl_drm_authenticate (d->drm, magic);
+}
+
+static void
+drm_handle_format (void *data, struct wl_drm *drm, uint32_t format)
+{
+  GstWlDisplay *self = data;
+  g_array_append_val (self->shm_formats, format);
+  GST_DEBUG ("drm got format: %" GST_FOURCC_FORMAT, GST_FOURCC_ARGS (format));
+}
+
+static void
+drm_handle_authenticated (void *data, struct wl_drm *drm)
+{
+  GstWlDisplay *d = data;
+  GST_DEBUG ("authenticated");
+  d->dev = tcc_device_create (d->fd);
+  d->authenticated = 1;
+  GST_DEBUG ("drm_handle_authenticated: dev: %p, d->authenticated: %d\n",
+      d->dev, d->authenticated);
+}
+
+static const struct wl_drm_listener drm_listener = {
+  drm_handle_device,
+  drm_handle_format,
+  drm_handle_authenticated
+};
 static void
 registry_handle_global (void *data, struct wl_registry *registry,
     uint32_t id, const char *interface, uint32_t version)
@@ -164,6 +224,9 @@ registry_handle_global (void *data, struct wl_registry *registry,
   } else if (g_strcmp0 (interface, "wl_shm") == 0) {
     self->shm = wl_registry_bind (registry, id, &wl_shm_interface, 1);
     wl_shm_add_listener (self->shm, &shm_listener, self);
+  } else if (g_strcmp0 (interface, "wl_drm") == 0) {
+    self->drm = wl_registry_bind (registry, id, &wl_drm_interface, 2);
+    wl_drm_add_listener (self->drm, &drm_listener, self);
   } else if (g_strcmp0 (interface, "wp_viewporter") == 0) {
     self->viewporter =
         wl_registry_bind (registry, id, &wp_viewporter_interface, 1);
@@ -270,6 +333,7 @@ gst_wl_display_new_existing (struct wl_display * display,
   VERIFY_INTERFACE_EXISTS (subcompositor, "wl_subcompositor");
   VERIFY_INTERFACE_EXISTS (shell, "wl_shell");
   VERIFY_INTERFACE_EXISTS (shm, "wl_shm");
+  VERIFY_INTERFACE_EXISTS (drm, "wl_drm");
 
 #undef VERIFY_INTERFACE_EXISTS
 

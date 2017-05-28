@@ -51,6 +51,7 @@ struct _GstWlDisplay
   struct wl_subcompositor *subcompositor;
   struct wl_shell *shell;
   struct wl_shm *shm;
+  struct wl_drm *drm;
   struct wp_viewporter *viewporter;
   GArray *shm_formats;
 
@@ -62,6 +63,16 @@ struct _GstWlDisplay
   GMutex buffers_mutex;
   GHashTable *buffers;
   gboolean shutting_down;
+
+  /* the drm device.. needed for sharing direct-render buffers..
+   * TODO nothing about this should really be tccdrm specific.  But some
+   * of the code, like hashtable of imported buffers in libdrm_tcc should
+   * be refactored out into some generic libdrm code..
+   */
+  struct tcc_device *dev;
+  int fd;
+  int authenticated;
+  gboolean use_drm;
 };
 
 struct _GstWlDisplayClass

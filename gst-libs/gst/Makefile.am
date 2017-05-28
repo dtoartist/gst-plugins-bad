@@ -11,7 +11,7 @@ WAYLAND_DIR=wayland
 endif
 
 SUBDIRS = uridownloader adaptivedemux interfaces basecamerabinsrc codecparsers \
-	 insertbin mpegts base video audio player $(GL_DIR) $(WAYLAND_DIR)
+	 insertbin mpegts base video audio player drm $(GL_DIR) $(WAYLAND_DIR)
 
 noinst_HEADERS = gst-i18n-plugin.h gettext.h glib-compat-private.h
 DIST_SUBDIRS = uridownloader adaptivedemux interfaces gl basecamerabinsrc \
@@ -24,7 +24,7 @@ adaptivedemux: uridownloader
 
 INDEPENDENT_SUBDIRS = \
 	interfaces basecamerabinsrc codecparsers insertbin uridownloader \
-	mpegts base player $(GL_DIR) $(WAYLAND_DIR)
+	mpegts base player drm $(GL_DIR) $(WAYLAND_DIR)
 
 .PHONY: independent-subdirs $(INDEPENDENT_SUBDIRS)
 

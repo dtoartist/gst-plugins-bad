@@ -61,6 +61,7 @@ struct _GstWaylandSink
   GstVideoInfo video_info;
 
   gchar *display_name;
+  gboolean use_drm;
 
   gboolean redraw_pending;
   GMutex render_lock;

@@ -45,6 +45,13 @@
 #include "wlvideoformat.h"
 #include "wlbuffer.h"
 #include "wlshmallocator.h"
+#include "wldrm.h"
+
+#include <gst/drm/gstdrmallocator.h>
+#include "wayland-drm-client-protocol.h"
+#include <tcc_drm.h>
+#include <tcc_drmif.h>
+#include <wayland-client.h>
 
 #include <gst/wayland/wayland.h>
 #include <gst/video/videooverlay.h>
@@ -60,7 +67,8 @@ enum
 enum
 {
   PROP_0,
-  PROP_DISPLAY
+  PROP_DISPLAY,
+  PROP_ALLOCATION
 };
 
 GST_DEBUG_CATEGORY (gstwayland_debug);
@@ -158,6 +166,11 @@ gst_wayland_sink_class_init (GstWaylandSinkClass * klass)
       g_param_spec_string ("display", "Wayland Display name", "Wayland "
           "display name to connect to, if not supplied via the GstContext",
           NULL, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
+  g_object_class_install_property (gobject_class, PROP_ALLOCATION,
+      g_param_spec_boolean ("use-drm", "Wayland Allocation name", "Wayland "
+          "Use DRM based memory for allocation",
+          FALSE, G_PARAM_WRITABLE));
 }
 
 static void
@@ -195,6 +208,11 @@ gst_wayland_sink_set_property (GObject * object,
     case PROP_DISPLAY:
       GST_OBJECT_LOCK (sink);
       sink->display_name = g_value_dup_string (value);
+      GST_OBJECT_UNLOCK (sink);
+      break;
+   case PROP_ALLOCATION:
+      GST_OBJECT_LOCK (sink);
+      sink->use_drm = g_value_get_boolean (value);
       GST_OBJECT_UNLOCK (sink);
       break;
     default:
@@ -281,6 +299,7 @@ gst_wayland_sink_find_display (GstWaylandSink * sink)
         /* if the application didn't set a display, let's create it ourselves */
         GST_OBJECT_LOCK (sink);
         sink->display = gst_wl_display_new (sink->display_name, &error);
+        sink->display->use_drm = sink->use_drm;
         GST_OBJECT_UNLOCK (sink);
 
         if (error) {
@@ -427,6 +446,17 @@ gst_wayland_sink_get_caps (GstBaseSink * bsink, GstCaps * filter)
   return caps;
 }
 
+static void
+wait_authentication (GstWaylandSink * sink)
+{
+  GST_DEBUG_OBJECT (sink, "Before wait aunthenticated value is %d : \n", sink->display->authenticated );
+  while (!sink->display->authenticated) {
+    GST_DEBUG_OBJECT (sink, "waiting for authentication");
+    wl_display_roundtrip (sink->display->display);
+  }
+  GST_DEBUG_OBJECT (sink, "After wait aunthenticated value is %d : \n", sink->display->authenticated );
+}
+
 static GstBufferPool *
 gst_wayland_create_pool (GstWaylandSink * sink, GstCaps * caps)
 {
@@ -458,10 +488,20 @@ gst_wayland_sink_set_caps (GstBaseSink * bsink, GstCaps * caps)
   enum wl_shm_format format;
   GArray *formats;
   gint i;
+  GstStructure *structure;
+  GstStructure *s;
+  gboolean use_drm = 0;
+  int num_buffers = 0;
 
   sink = GST_WAYLAND_SINK (bsink);
 
   GST_DEBUG_OBJECT (sink, "set caps %" GST_PTR_FORMAT, caps);
+
+  wait_authentication (sink);
+
+  while (!sink->display->authenticated) {
+    GST_DEBUG_OBJECT (sink, "not authenticated yet");
+  }
 
   /* extract info from caps */
   if (!gst_video_info_from_caps (&info, caps))
@@ -486,10 +526,32 @@ gst_wayland_sink_set_caps (GstBaseSink * bsink, GstCaps * caps)
   sink->video_info_changed = TRUE;
 
   /* create a new pool for the new configuration */
-  newpool = gst_wayland_create_pool (sink, caps);
+  s = gst_caps_get_structure (caps, 0);
+  gst_structure_get_boolean (s, "drm_mem", &use_drm);
+  gst_structure_get_int (s, "max-ref-frames", &num_buffers);
+  if (num_buffers )
+    num_buffers = num_buffers + 2;
+
+  newpool = gst_buffer_pool_new ();
   if (!newpool)
     goto pool_failed;
 
+  structure = gst_buffer_pool_get_config (newpool);
+  gst_buffer_pool_config_set_params (structure, caps, info.size, 2, num_buffers);
+  if ( use_drm ) {
+    gst_buffer_pool_config_set_allocator (structure, gst_drm_allocator_get (),
+        NULL);
+    sink->display->use_drm = TRUE;
+  } else {
+    gst_buffer_pool_config_set_allocator (structure, gst_wl_shm_allocator_get (),
+        NULL);
+  }
+  if (!gst_buffer_pool_set_config (newpool, structure))
+    goto config_failed;
+
+  /* store the video info */
+  sink->video_info = info;
+  sink->video_info_changed = TRUE;
 
   gst_object_replace ((GstObject **) & sink->pool, (GstObject *) newpool);
   gst_object_unref (newpool);
@@ -510,7 +572,13 @@ unsupported_format:
   }
 pool_failed:
   {
-    GST_ERROR_OBJECT (sink, "Failed to create new pool");
+    GST_DEBUG_OBJECT (sink, "Failed to create new pool");
+    return FALSE;
+  }
+config_failed:
+  {
+    GST_DEBUG_OBJECT (bsink, "failed setting config");
+    gst_object_unref (newpool);
     return FALSE;
   }
 }
@@ -533,7 +601,11 @@ gst_wayland_sink_propose_allocation (GstBaseSink * bsink, GstQuery * query)
     g_object_unref (pool);
   }
 
-  gst_query_add_allocation_param (query, gst_wl_shm_allocator_get (), NULL);
+  if (sink->display->use_drm) {
+    gst_query_add_allocation_param (query, gst_drm_allocator_get (), NULL);
+  } else {
+    gst_query_add_allocation_param (query, gst_wl_shm_allocator_get (), NULL);
+  }
   gst_query_add_allocation_meta (query, GST_VIDEO_META_API_TYPE, NULL);
 
   return TRUE;
@@ -646,6 +718,11 @@ gst_wayland_sink_show_frame (GstVideoSink * vsink, GstBuffer * buffer)
 
     if (gst_is_wl_shm_memory (mem)) {
       wbuf = gst_wl_shm_memory_construct_wl_buffer (mem, sink->display,
+          &sink->video_info);
+    }
+
+    if (gst_is_drm_memory (mem)) {
+      wbuf = gst_wl_drm_memory_construct_wl_buffer (mem, sink->display,
           &sink->video_info);
     }
 

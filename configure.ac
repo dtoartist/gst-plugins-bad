@@ -638,6 +638,8 @@ if test x$with_egl_module_name != x; then
   AC_DEFINE_UNQUOTED(GST_GL_LIBEGL_MODULE_NAME, "$with_egl_module_name", [EGL module name])
 fi
 
+PKG_CHECK_MODULES([DRM], [libdrm libdrm_tcc], HAVE_KMS=yes, HAVE_KMS=no)
+
 AC_ARG_ENABLE([wgl],
      [  --enable-wgl            Enable WGL support @<:@default=auto@:>@],
      [case "${enableval}" in
@@ -2107,6 +2109,15 @@ AG_GST_CHECK_FEATURE(CHROMAPRINT, [chromaprint], chromaprint, [
 ])
 
 dnl *** Curl ***
+AC_ARG_ENABLE([libssh2],
+     [  --enable-libssh2		enable LIBSSH2 support @<:@default=auto@:>@],
+     [case "${enableval}" in
+       yes)  NEED_SSH2=yes ;;
+       no)   NEED_SSH2=no ;;
+       auto) NEED_SSH2=auto ;;
+       *) AC_MSG_ERROR([bad value ${enableval} for --enable-libssh2]) ;;
+     esac],[NEED_SSH2=auto])
+
 translit(dnm, m, l) AM_CONDITIONAL(USE_CURL, true)
 AG_GST_CHECK_FEATURE(CURL, [Curl plugin], curl, [
   PKG_CHECK_MODULES(CURL, libcurl >= 7.35.0, [
@@ -2129,12 +2140,14 @@ AG_GST_CHECK_FEATURE(CURL, [Curl plugin], curl, [
   ])
   AC_SUBST(CURL_CFLAGS)
   AC_SUBST(CURL_LIBS)
-  PKG_CHECK_MODULES(SSH2, libssh2 >= 1.4.3, [
-    HAVE_SSH2="yes"
-    AC_DEFINE(HAVE_SSH2, 1, [Define if libssh2 is available])
-  ], [
-    HAVE_SSH2="no"
-  ])
+  if test "x$NEED_SSH2" != "xno"; then
+    PKG_CHECK_MODULES(SSH2, libssh2 >= 1.4.3, [
+      HAVE_SSH2="yes"
+      AC_DEFINE(HAVE_SSH2, 1, [Define if libssh2 is available])
+    ], [
+      HAVE_SSH2="no"
+    ])
+  fi
   AM_CONDITIONAL(USE_SSH2, test "x$HAVE_SSH2" = "xyes")
   AC_SUBST(SSH2_CFLAGS)
   AC_SUBST(SSH2_LIBS)
@@ -2218,11 +2231,13 @@ dnl **** Wayland ****
 translit(dnm, m, l) AM_CONDITIONAL(USE_WAYLAND, true)
 AC_PATH_PROG([wayland_scanner], [wayland-scanner])
 AG_GST_CHECK_FEATURE(WAYLAND, [wayland sink], wayland , [
-  PKG_CHECK_MODULES(WAYLAND, wayland-client >= 1.4.0, [
+  PKG_CHECK_MODULES(WAYLAND, wayland-client >= 1.4.0 libdrm libdrm_tcc, [
     PKG_CHECK_MODULES(WAYLAND_PROTOCOLS, wayland-protocols >= 1.4, [
       if test "x$wayland_scanner" != "x"; then
         HAVE_WAYLAND="yes"
-        AC_SUBST(WAYLAND_PROTOCOLS_DATADIR, `$PKG_CONFIG --variable=pkgdatadir wayland-protocols`)
+        AC_SUBST(WAYLAND_PROTOCOLS_DATADIR, ${WAYLAND_PROTOCOLS_SYSROOT_DIR}`$PKG_CONFIG --variable=pkgdatadir wayland-protocols`)
+        AC_SUBST(DRM_CFLAGS)
+        AC_SUBST(DRM_LIBS)
       else
         AC_MSG_RESULT([wayland-scanner is required to build the wayland plugin])
         HAVE_WAYLAND="no"
@@ -2385,7 +2400,9 @@ dnl *** kms ***
 translit(dnm, m, l) AM_CONDITIONAL(USE_KMS, true)
 AG_GST_CHECK_FEATURE(KMS, [drm/kms libraries], kms, [
   AG_GST_PKG_CHECK_MODULES(GST_ALLOCATORS, gstreamer-allocators-1.0)
-  PKG_CHECK_MODULES([DRM], [libdrm >= 2.4.55 libkms], HAVE_KMS=yes, HAVE_KMS=no)
+  PKG_CHECK_MODULES([DRM], [libdrm >= 2.4.55 libkms libdrm_tcc], HAVE_KMS=yes, HAVE_KMS=no)
+  AC_SUBST(DRM_CFLAGS)
+  AC_SUBST(DRM_LIBS)
 ])
 
 dnl *** ladspa ***
@@ -3690,6 +3707,7 @@ gst-libs/Makefile
 gst-libs/gst/Makefile
 gst-libs/gst/adaptivedemux/Makefile
 gst-libs/gst/basecamerabinsrc/Makefile
+gst-libs/gst/drm/Makefile
 gst-libs/gst/gl/Makefile
 gst-libs/gst/gl/android/Makefile
 gst-libs/gst/gl/cocoa/Makefile
@@ -3851,6 +3869,8 @@ pkgconfig/gstreamer-plugins-bad.pc
 pkgconfig/gstreamer-plugins-bad-uninstalled.pc
 pkgconfig/gstreamer-codecparsers.pc
 pkgconfig/gstreamer-codecparsers-uninstalled.pc
+pkgconfig/gstreamer-drm.pc
+pkgconfig/gstreamer-drm-uninstalled.pc
 pkgconfig/gstreamer-insertbin.pc
 pkgconfig/gstreamer-insertbin-uninstalled.pc
 pkgconfig/gstreamer-gl.pc

@@ -106,6 +106,10 @@ gst_wl_shm_format_to_video_format (enum wl_shm_format wl_format)
 const gchar *
 gst_wl_shm_format_to_string (enum wl_shm_format wl_format)
 {
-  return gst_video_format_to_string
-      (gst_wl_shm_format_to_video_format (wl_format));
+  GstVideoFormat fmt = gst_wl_shm_format_to_video_format (wl_format);
+  if (fmt != GST_VIDEO_FORMAT_UNKNOWN) {
+    return gst_video_format_to_string (fmt);
+  } else {
+    return NULL;
+  }
 }
